@@ -152,7 +152,6 @@ class OracleQueryService:
 
 def main():
     """Example usage of the OracleQueryService"""
-    # Example: Query a single object
     service = OracleQueryService()
     
     try:
@@ -162,41 +161,13 @@ def main():
         object_name = input("Enter object name to describe: ")
         result = service.describe_object(object_name)
         
-        if result['exists']:
-            print(f"\nObject: {result['object_name']}")
-            print(f"Type: {result['object_type']}")
-            print(f"Owner: {result['owner']}")
-            print(f"Status: {result['status']}")
-            print(f"\nColumns ({len(result['columns'])}):")
-            print("-" * 80)
-            
-            for col in result['columns']:
-                nullable = "NULL" if col['nullable'] else "NOT NULL"
-                type_info = col['type']
-                
-                if col['precision']:
-                    type_info += f"({col['precision']}"
-                    if col['scale']:
-                        type_info += f",{col['scale']}"
-                    type_info += ")"
-                elif col['length'] and col['type'] in ['VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR']:
-                    type_info += f"({col['length']})"
-                
-                print(f"{col['position']:3}. {col['name']:30} {type_info:20} {nullable}")
-        else:
-            print(f"\n{result['message']}")
+        print("\n" + result)
             
     finally:
         service.disconnect()
 
 
-if _service = OracleQueryService()
-    
-    try:
-        service.connect()
-        
-        # Describe a table
-        object_name = input("Enter object name to describe: ")
-        result = service.describe_object(object_name)
-        
-        print("\n" + result
+if __name__ == "__main__":
+    main()
+
+    main()
