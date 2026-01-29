@@ -64,12 +64,18 @@ class OracleQueryService:
         Returns a formatted string similar to SQL*Plus DESCRIBE output
         
         Args:
-            object_name: Name of the database object to describe
+            object_name: Name of the database object to describe (can be schema-qualified like SCHEMA.TABLE)
             owner: Optional schema owner (defaults to current user)
             
         Returns:
             Formatted string with DESCRIBE output
         """
+        # Parse schema-qualified names (e.g., "SCHEMA.TABLE")
+        if '.' in object_name and owner is None:
+            parts = object_name.split('.', 1)  # Split on first dot only
+            owner = parts[0]
+            object_name = parts[1]
+        
         if not self.connection:
             self.connect()
         
