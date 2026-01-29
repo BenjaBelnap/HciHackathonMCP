@@ -1,0 +1,78 @@
+services:
+  # --- The LLM Engine ---
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - ai-network
+
+  # --- Automated Model Downloader ---
+  ollama-pull-model:
+    image: ollama/ollama:latest
+    container_name: ollama-pull-model
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - ai-network
+    # This script waits for Ollama to wake up, then pulls the models
+    entrypoint: /bin/sh
+    command: >
+      -c "sleep 5;
+      echo 'Pulling Granite model...';
+      ollama pull granite4:small-h;
+      echo 'Pulling alternative models (optional)...';
+      # ollama pull llama3.2:3b;
+      # ollama pull mistral:7b;
+      echo 'Done!';"
+    depends_on:
+      - ollama
+
+  # --- The MCP Bridge ---
+  mcpo:
+    image: ghcr.io/open-webui/mcpo:main
+    container_name: mcpo
+    volumes:
+      - ./mcpo-config/config.json:/app/config/config.json
+    environment:
+      - PORT=8000
+    command: mcpo --config /app/config/config.json
+    restart: unless-stopped
+    networks:
+      - ai-network
+
+  # --- The User Interface ---
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=super_secret_key_change_me
+    depends_on:
+      - ollama
+      - mcpo
+      - ollama-pull-model
+    restart: unless-stopped
+    networks:
+      - ai-network
+
+networks:
+  ai-network:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  open-webui_data:
