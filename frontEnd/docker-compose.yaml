@@ -55,6 +55,7 @@ services:
     container_name: mcpo
     volumes:
       - ./mcpo-config/config.json:/app/config/config.json
+      - ./data:/data
     environment:
       - PORT=8000
     command: mcpo --config /app/config/config.json
@@ -76,7 +77,7 @@ services:
     depends_on:
       - ollama
       - mcpo
-      # - ollama-pull-model
+      #- ollama-pull-model
     restart: unless-stopped
     networks:
       - ai-network
