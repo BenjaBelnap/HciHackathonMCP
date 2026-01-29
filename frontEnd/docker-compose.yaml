@@ -1,8 +1,20 @@
 services:
-  # --- The LLM Engine ---
+  # --- The LLM Engine (Default: CPU-only for Mac compatibility) ---
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
+    profiles: ["cpu"]
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - ai-network
+
+  # --- The LLM Engine (GPU-enabled for Windows/Linux with NVIDIA) ---
+  ollama-gpu:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["gpu"]
     volumes:
       - ollama_data:/root/.ollama
     deploy:
@@ -37,18 +49,6 @@ services:
   #   depends_on:
   #     - ollama
 
-  # --- The MCP Bridge ---
-  mcpo:
-    image: ghcr.io/open-webui/mcpo:main
-    container_name: mcpo
-    volumes:
-      - ./mcpo-config/config.json:/app/config/config.json
-    environment:
-      - PORT=8000
-    command: mcpo --config /app/config/config.json
-    restart: unless-stopped
-    networks:
-      - ai-network
 
   # --- The User Interface ---
   open-webui:
@@ -61,10 +61,12 @@ services:
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - WEBUI_SECRET_KEY=super_secret_key_change_me
-    depends_on:
-      - ollama
-      - mcpo
-      # - ollama-pull-model
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # depends_on:
+    #   # - ollama
+    #   - mcpo
+      #- ollama-pull-model
     restart: unless-stopped
     networks:
       - ai-network
