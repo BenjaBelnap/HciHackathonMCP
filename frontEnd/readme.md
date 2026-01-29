@@ -1,7 +1,13 @@
 # How to use
 
+**For Mac (CPU-only):**
 ``` bash
-docker compose up -d 
+docker compose --profile cpu up -d 
+```
+
+**For Windows/Linux with NVIDIA GPU:**
+``` bash
+docker compose --profile gpu up -d 
 ```
 
 This will give you a front end hosted on port 3000. http://localhost:3000/

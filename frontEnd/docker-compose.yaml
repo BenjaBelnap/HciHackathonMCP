@@ -1,8 +1,20 @@
 services:
-  # --- The LLM Engine ---
+  # --- The LLM Engine (Default: CPU-only for Mac compatibility) ---
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
+    profiles: ["cpu"]
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - ai-network
+
+  # --- The LLM Engine (GPU-enabled for Windows/Linux with NVIDIA) ---
+  ollama-gpu:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["gpu"]
     volumes:
       - ollama_data:/root/.ollama
     deploy:
