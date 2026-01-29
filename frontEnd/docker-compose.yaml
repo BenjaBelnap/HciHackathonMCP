@@ -64,7 +64,7 @@ services:
     depends_on:
       - ollama
       - mcpo
-      - ollama-pull-model
+      #- ollama-pull-model
     restart: unless-stopped
     networks:
       - ai-network
