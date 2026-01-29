@@ -17,25 +17,25 @@ services:
       - ai-network
 
   # --- Automated Model Downloader ---
-  ollama-pull-model:
-    image: ollama/ollama:latest
-    container_name: ollama-pull-model
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - ai-network
-    # This script waits for Ollama to wake up, then pulls the models
-    entrypoint: /bin/sh
-    command: >
-      -c "sleep 5;
-      echo 'Pulling Granite model...';
-      ollama pull granite4:small-h;
-      echo 'Pulling alternative models (optional)...';
-      # ollama pull llama3.2:3b;
-      # ollama pull mistral:7b;
-      echo 'Done!';"
-    depends_on:
-      - ollama
+  # ollama-pull-model:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama-pull-model
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   networks:
+  #     - ai-network
+  #   # This script waits for Ollama to wake up, then pulls the models
+  #   entrypoint: /bin/sh
+  #   command: >
+  #     -c "sleep 5;
+  #     echo 'Pulling Granite model...';
+  #     ollama pull granite4:small-h;
+  #     echo 'Pulling alternative models (optional)...';
+  #     # ollama pull llama3.2:3b;
+  #     # ollama pull mistral:7b;
+  #     echo 'Done!';"
+  #   depends_on:
+  #     - ollama
 
   # --- The MCP Bridge ---
   mcpo:
