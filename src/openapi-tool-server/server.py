@@ -32,13 +32,8 @@ class SearchObjectsRequest(BaseModel):
     object_type: Optional[str] = Field(None, description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)")
     owner: Optional[str] = Field(None, description="Optional schema owner filter")
 
-class DatabaseObject(BaseModel):
-    owner: str
-    object_name: str
-    object_type: str
-
 class SearchObjectsResponse(BaseModel):
-    objects: list[DatabaseObject]
+    objects: list[str]
     count: int
     pattern: str
 

@@ -93,6 +93,9 @@ class OracleQueryService:
             if object_type:
                 query += " AND object_type = :object_type"
                 params['object_type'] = object_type.upper()
+            else:
+                # Default to only tables and views if no type specified
+                query += " AND object_type IN ('TABLE', 'VIEW')"
             
             if owner:
                 query += " AND owner = :owner"
@@ -103,13 +106,9 @@ class OracleQueryService:
             cursor.execute(query, params)
             results = cursor.fetchall()
             
-            # Format results as list of dictionaries
+            # Format results as simple strings for LLM efficiency
             objects = [
-                {
-                    'owner': row[0],
-                    'object_name': row[1],
-                    'object_type': row[2]
-                }
+                f"{row[2].title()} Name: {row[0]}.{row[1]}"
                 for row in results
             ]
             
