@@ -28,14 +28,53 @@ class DescribeObjectResponse(BaseModel):
     owner: Optional[str]
 
 class SearchObjectsRequest(BaseModel):
-    pattern: str = Field(..., description="Search pattern for object names (e.g., 'patient' will find all objects with 'patient' in the name)")
-    object_type: Optional[str] = Field(None, description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)")
-    owner: Optional[str] = Field(None, description="Optional schema owner filter")
+    pattern: str = Field(
+        ..., 
+        description="Search pattern for object names (e.g., 'patient' will find all objects with 'patient' in the name)",
+        examples=["patient", "emp", "order"]
+    )
+    object_type: Optional[str] = Field(
+        None, 
+        description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)",
+        examples=["TABLE", "VIEW"]
+    )
+    owner: Optional[str] = Field(
+        None, 
+        description="Optional schema owner filter",
+        examples=["MYSCHEMA", "HR"]
+    )
 
 class SearchObjectsResponse(BaseModel):
     objects: list[str]
     count: int
     pattern: str
+
+class SearchAndDescribeRequest(BaseModel):
+    pattern: str = Field(
+        ..., 
+        description="Search pattern for object names (e.g., 'patient' will find all objects with 'patient' in the name)",
+        examples=["patient", "emp", "order"]
+    )
+    object_type: Optional[str] = Field(
+        None, 
+        description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)",
+        examples=["TABLE", "VIEW"]
+    )
+    owner: Optional[str] = Field(
+        None, 
+        description="Optional schema owner filter",
+        examples=["MYSCHEMA", "HR"]
+    )
+    describe_all: bool = Field(
+        False, 
+        description="If True, describes all matching objects. If False, only describes the first match"
+    )
+
+class SearchAndDescribeResponse(BaseModel):
+    objects: list[str]
+    count: int
+    pattern: str
+    descriptions: dict[str, str]
 
 @app.get("/")
 def root():
@@ -48,8 +87,20 @@ def root():
 @app.post("/search_objects", response_model=SearchObjectsResponse, tags=["tools"])
 def search_objects(request: SearchObjectsRequest):
     """
-    Search for Oracle database objects matching a pattern
-    Use this to discover objects before describing them
+    Search for Oracle database objects matching a pattern.
+    Use this to discover objects before describing them.
+    
+    Example request body:
+    {
+        "pattern": "patient",
+        "object_type": "TABLE",
+        "owner": "MYSCHEMA"
+    }
+    
+    Or minimal:
+    {
+        "pattern": "patient"
+    }
     """
     try:
         service = OracleQueryService()
@@ -83,8 +134,19 @@ def search_objects(request: SearchObjectsRequest):
 @app.post("/describe_object", response_model=DescribeObjectResponse, tags=["tools"])
 def describe_object(request: DescribeObjectRequest):
     """
-    Describe an Oracle database object (table, view, etc.)
-    Returns column information similar to SQL*Plus DESCRIBE command
+    Describe an Oracle database object (table, view, etc.).
+    Returns column information similar to SQL*Plus DESCRIBE command.
+    
+    Example request body:
+    {
+        "object_name": "PATIENTS",
+        "owner": "MYSCHEMA"
+    }
+    
+    Or use schema-qualified name:
+    {
+        "object_name": "MYSCHEMA.PATIENTS"
+    }
     """
     try:
         service = OracleQueryService()
@@ -111,6 +173,76 @@ def describe_object(request: DescribeObjectRequest):
             f"- Check if the schema/owner name is correct (if specified)\n"
             f"- Ensure database connectivity is working\n"
             f"- Verify you have appropriate permissions to access this object"
+        )
+        raise HTTPException(status_code=500, detail=error_message)
+
+@app.post("/search_and_describe", response_model=SearchAndDescribeResponse, tags=["tools"])
+def search_and_describe(request: SearchAndDescribeRequest):
+    """
+    Search for Oracle database objects matching a pattern and describe them.
+    This combines search and describe operations in one step for convenience.
+    
+    Example request body:
+    {
+        "pattern": "patient",
+        "object_type": "TABLE",
+        "owner": "MYSCHEMA",
+        "describe_all": false
+    }
+    
+    Or minimal (describes only first match):
+    {
+        "pattern": "patient"
+    }
+    
+    Note: All parameters must be sent in the request BODY as JSON, not as query parameters.
+    """
+    try:
+        service = OracleQueryService()
+        service.connect()
+        
+        # First, search for matching objects
+        objects = service.search_objects(
+            pattern=request.pattern,
+            object_type=request.object_type,
+            owner=request.owner
+        )
+        
+        # Then describe the matching objects
+        descriptions = {}
+        
+        if objects:
+            # Determine how many objects to describe
+            objects_to_describe = objects if request.describe_all else objects[:1]
+            
+            for obj_str in objects_to_describe:
+                # Parse the object string (format: "Table Name: OWNER.OBJECT_NAME")
+                parts = obj_str.split(": ", 1)
+                if len(parts) == 2:
+                    full_name = parts[1]  # This is "OWNER.OBJECT_NAME"
+                    
+                    # Describe the object (the service handles schema-qualified names)
+                    description = service.describe_object(full_name)
+                    descriptions[full_name] = description
+        
+        service.disconnect()
+        
+        return SearchAndDescribeResponse(
+            objects=objects,
+            count=len(objects),
+            pattern=request.pattern,
+            descriptions=descriptions
+        )
+    except Exception as e:
+        error_message = (
+            f"ERROR occurred while finding and describing database objects with pattern '{request.pattern}': {str(e)}\n\n"
+            f"INSTRUCTIONS FOR LLM: Please inform the user about this error in a clear and helpful way. "
+            f"Explain what went wrong and suggest potential solutions such as:\n"
+            f"- Verify database connectivity is working\n"
+            f"- Check if the schema/owner name is correct (if specified)\n"
+            f"- Ensure you have appropriate permissions to query the data dictionary\n"
+            f"- Try a different search pattern\n"
+            f"- Check if the matching objects exist and are accessible"
         )
         raise HTTPException(status_code=500, detail=error_message)
 
