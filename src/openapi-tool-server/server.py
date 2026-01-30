@@ -27,6 +27,21 @@ class DescribeObjectResponse(BaseModel):
     object_name: str
     owner: Optional[str]
 
+class SearchObjectsRequest(BaseModel):
+    pattern: str = Field(..., description="Search pattern for object names (e.g., 'patient' will find all objects with 'patient' in the name)")
+    object_type: Optional[str] = Field(None, description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)")
+    owner: Optional[str] = Field(None, description="Optional schema owner filter")
+
+class DatabaseObject(BaseModel):
+    owner: str
+    object_name: str
+    object_type: str
+
+class SearchObjectsResponse(BaseModel):
+    objects: list[DatabaseObject]
+    count: int
+    pattern: str
+
 @app.get("/")
 def root():
     return {
@@ -34,6 +49,41 @@ def root():
         "docs": "/docs",
         "openapi": "/openapi.json"
     }
+
+@app.post("/search_objects", response_model=SearchObjectsResponse, tags=["tools"])
+def search_objects(request: SearchObjectsRequest):
+    """
+    Search for Oracle database objects matching a pattern
+    Use this to discover objects before describing them
+    """
+    try:
+        service = OracleQueryService()
+        service.connect()
+        
+        objects = service.search_objects(
+            pattern=request.pattern,
+            object_type=request.object_type,
+            owner=request.owner
+        )
+        
+        service.disconnect()
+        
+        return SearchObjectsResponse(
+            objects=objects,
+            count=len(objects),
+            pattern=request.pattern
+        )
+    except Exception as e:
+        error_message = (
+            f"ERROR occurred while searching for database objects with pattern '{request.pattern}': {str(e)}\n\n"
+            f"INSTRUCTIONS FOR LLM: Please inform the user about this error in a clear and helpful way. "
+            f"Explain what went wrong and suggest potential solutions such as:\n"
+            f"- Verify database connectivity is working\n"
+            f"- Check if the schema/owner name is correct (if specified)\n"
+            f"- Ensure you have appropriate permissions to query the data dictionary\n"
+            f"- Try a different search pattern"
+        )
+        raise HTTPException(status_code=500, detail=error_message)
 
 @app.post("/describe_object", response_model=DescribeObjectResponse, tags=["tools"])
 def describe_object(request: DescribeObjectRequest):

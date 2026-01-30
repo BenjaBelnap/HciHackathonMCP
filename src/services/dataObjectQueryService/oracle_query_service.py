@@ -58,6 +58,67 @@ class OracleQueryService:
             self.connection.close()
             print("Database connection closed")
     
+    def search_objects(self, pattern: str, object_type: Optional[str] = None, owner: Optional[str] = None) -> list:
+        """
+        Search for database objects matching a pattern
+        
+        Args:
+            pattern: Search pattern (e.g., 'patient' will find objects like '%PATIENT%')
+            object_type: Optional filter by object type (TABLE, VIEW, etc.)
+            owner: Optional schema owner filter
+            
+        Returns:
+            List of dictionaries with object information
+        """
+        if not self.connection:
+            self.connect()
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # Build query to search for objects
+            query = """
+                SELECT DISTINCT
+                    owner,
+                    object_name,
+                    object_type
+                FROM all_objects
+                WHERE object_name LIKE :pattern
+            """
+            
+            # Add wildcards to pattern
+            search_pattern = f"%{pattern.upper()}%"
+            params = {'pattern': search_pattern}
+            
+            if object_type:
+                query += " AND object_type = :object_type"
+                params['object_type'] = object_type.upper()
+            
+            if owner:
+                query += " AND owner = :owner"
+                params['owner'] = owner.upper()
+            
+            query += " ORDER BY owner, object_type, object_name"
+            
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            
+            # Format results as list of dictionaries
+            objects = [
+                {
+                    'owner': row[0],
+                    'object_name': row[1],
+                    'object_type': row[2]
+                }
+                for row in results
+            ]
+            
+            cursor.close()
+            return objects
+            
+        except Exception as e:
+            raise Exception(f"Error searching for objects: {e}")
+    
     def describe_object(self, object_name: str, owner: Optional[str] = None) -> str:
         """
         Describe an Oracle database object (table, view, etc.)
