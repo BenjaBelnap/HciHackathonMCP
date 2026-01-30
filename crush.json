@@ -1,0 +1,63 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "ollama": {
+      "name": "Ollama",
+      "base_url": "http://localhost:11434/v1/",
+      "type": "openai-compat",
+      "models": [
+        {
+          "name": "Qwen 2.5 7B (Best for Tools)",
+          "id": "qwen2.5:7b",
+          "context_window": 128000,
+          "default_max_tokens": 8000
+        },
+        {
+          "name": "Qwen3 8B",
+          "id": "qwen3:8b",
+          "context_window": 128000,
+          "default_max_tokens": 8000
+        },
+        {
+          "name": "Granite4 Small-H (19GB)",
+          "id": "granite4:small-h",
+          "context_window": 128000,
+          "default_max_tokens": 8000
+        },
+        {
+          "name": "Granite4 Latest",
+          "id": "granite4:latest",
+          "context_window": 128000,
+          "default_max_tokens": 8000
+        },
+        {
+          "name": "Granite4 350M",
+          "id": "granite4:350m",
+          "context_window": 128000,
+          "default_max_tokens": 4000
+        }
+      ]
+    }
+  },
+  "mcp": {
+    "oracle-database": {
+      "type": "stdio",
+      "command": "C:/Users/u1290751/Documents/Repos/HciHackathonMCP/.venv/Scripts/python.exe",
+      "args": ["C:/Users/u1290751/Documents/Repos/HciHackathonMCP/src/mcp-server/server.py"],
+      "timeout": 60,
+      "env": {
+        "ORACLE_USERNAME": "CLARITY",
+        "ORACLE_PASSWORD": "Clarity123",
+        "ORACLE_HOST": "localhost",
+        "ORACLE_PORT": "1521",
+        "ORACLE_SERVICE_NAME": "XEPDB1"
+      }
+    }
+  },
+  "permissions": {
+    "allowed_tools": [
+      "mcp_oracle-database_search_database_objects",
+      "mcp_oracle-database_describe_database_object"
+    ]
+  }
+}
