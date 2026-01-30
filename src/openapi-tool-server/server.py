@@ -1,56 +1,123 @@
 """
-Simple OpenAPI-compliant server for Open-WebUI external tools
+Oracle Database Query Tool Server for Open-WebUI
 """
-from fastapi import FastAPI
+import sys
+import os
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 
+# Add the services directory to the Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'services', 'dataObjectQueryService'))
+
+from oracle_query_service import OracleQueryService
+
 app = FastAPI(
-    title="Hello World Tool Server",
-    description="A simple server with tools for Open-WebUI",
+    title="Oracle Database Tool Server",
+    description="A server with Oracle database query tools for Open-WebUI",
     version="1.0.0"
 )
 
-class GreetRequest(BaseModel):
-    name: str = Field(..., description="The name to greet")
-    language: Optional[str] = Field("english", description="Language for greeting (english, spanish, french)")
+class DescribeObjectRequest(BaseModel):
+    object_name: str = Field(..., description="Name of the Oracle database object (table, view, etc.) to describe")
+    owner: Optional[str] = Field(None, description="Optional schema owner (defaults to current user)")
 
-class GreetResponse(BaseModel):
-    greeting: str
-    
-class EchoRequest(BaseModel):
-    message: str = Field(..., description="The message to echo back")
+class DescribeObjectResponse(BaseModel):
+    result: str
+    object_name: str
+    owner: Optional[str]
 
-class EchoResponse(BaseModel):
-    echoed_message: str
+class SearchObjectsRequest(BaseModel):
+    pattern: str = Field(..., description="Search pattern for object names (e.g., 'patient' will find all objects with 'patient' in the name)")
+    object_type: Optional[str] = Field(None, description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)")
+    owner: Optional[str] = Field(None, description="Optional schema owner filter")
+
+class DatabaseObject(BaseModel):
+    owner: str
+    object_name: str
+    object_type: str
+
+class SearchObjectsResponse(BaseModel):
+    objects: list[DatabaseObject]
+    count: int
+    pattern: str
 
 @app.get("/")
 def root():
     return {
-        "message": "Hello World Tool Server",
+        "message": "Oracle Database Tool Server",
         "docs": "/docs",
         "openapi": "/openapi.json"
     }
 
-@app.post("/greet", response_model=GreetResponse, tags=["tools"])
-def greet(request: GreetRequest):
+@app.post("/search_objects", response_model=SearchObjectsResponse, tags=["tools"])
+def search_objects(request: SearchObjectsRequest):
     """
-    Greet someone in different languages
+    Search for Oracle database objects matching a pattern
+    Use this to discover objects before describing them
     """
-    greetings = {
-        "english": f"Hello, {request.name}!",
-        "spanish": f"¡Hola, {request.name}!",
-        "french": f"Bonjour, {request.name}!"
-    }
-    greeting = greetings.get(request.language.lower(), f"Hello, {request.name}!")
-    return GreetResponse(greeting=greeting)
+    try:
+        service = OracleQueryService()
+        service.connect()
+        
+        objects = service.search_objects(
+            pattern=request.pattern,
+            object_type=request.object_type,
+            owner=request.owner
+        )
+        
+        service.disconnect()
+        
+        return SearchObjectsResponse(
+            objects=objects,
+            count=len(objects),
+            pattern=request.pattern
+        )
+    except Exception as e:
+        error_message = (
+            f"ERROR occurred while searching for database objects with pattern '{request.pattern}': {str(e)}\n\n"
+            f"INSTRUCTIONS FOR LLM: Please inform the user about this error in a clear and helpful way. "
+            f"Explain what went wrong and suggest potential solutions such as:\n"
+            f"- Verify database connectivity is working\n"
+            f"- Check if the schema/owner name is correct (if specified)\n"
+            f"- Ensure you have appropriate permissions to query the data dictionary\n"
+            f"- Try a different search pattern"
+        )
+        raise HTTPException(status_code=500, detail=error_message)
 
-@app.post("/echo", response_model=EchoResponse, tags=["tools"])
-def echo(request: EchoRequest):
+@app.post("/describe_object", response_model=DescribeObjectResponse, tags=["tools"])
+def describe_object(request: DescribeObjectRequest):
     """
-    Echo back the provided message
+    Describe an Oracle database object (table, view, etc.)
+    Returns column information similar to SQL*Plus DESCRIBE command
     """
-    return EchoResponse(echoed_message=request.message)
+    try:
+        service = OracleQueryService()
+        service.connect()
+        
+        result = service.describe_object(
+            object_name=request.object_name,
+            owner=request.owner
+        )
+        
+        service.disconnect()
+        
+        return DescribeObjectResponse(
+            result=result,
+            object_name=request.object_name,
+            owner=request.owner
+        )
+    except Exception as e:
+        error_message = (
+            f"ERROR occurred while describing database object '{request.object_name}': {str(e)}\n\n"
+            f"INSTRUCTIONS FOR LLM: Please inform the user about this error in a clear and helpful way. "
+            f"Explain what went wrong and suggest potential solutions such as:\n"
+            f"- Verify the object name is correct and exists in the database\n"
+            f"- Check if the schema/owner name is correct (if specified)\n"
+            f"- Ensure database connectivity is working\n"
+            f"- Verify you have appropriate permissions to access this object"
+        )
+        raise HTTPException(status_code=500, detail=error_message)
 
 @app.get("/health")
 def health():

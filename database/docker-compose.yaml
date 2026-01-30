@@ -1,0 +1,21 @@
+services:
+  oracle-db:
+    image: gvenzl/oracle-xe:latest
+    container_name: oracle-clarity-db
+    ports:
+      - "1521:1521"
+    environment:
+      - ORACLE_PASSWORD=OraclePassword123
+    volumes:
+      - oracle_data:/opt/oracle/oradata
+      - ./init-scripts:/container-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  oracle_data:
+    driver: local

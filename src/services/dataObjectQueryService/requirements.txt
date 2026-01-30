@@ -1,0 +1,7 @@
+# Python dependencies for Oracle Query Service
+
+# Oracle database driver
+oracledb>=2.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
