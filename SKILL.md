@@ -18,9 +18,9 @@ Use it whenever you need to:
 
 ## Base URL
 
-Default: `http://localhost:8001`
+Default: `http://host.docker.internal:8001`
 
-Swagger UI: `http://localhost:8001/docs`
+Swagger UI: `http://host.docker.internal:8001/docs`
 
 ---
 
