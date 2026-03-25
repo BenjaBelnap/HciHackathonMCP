@@ -1,255 +1,581 @@
 """
-Oracle Database Query Tool Server for Open-WebUI
+Multi-database Object Query Tool Server for Open-WebUI / coding agents.
+
+Supports Oracle and SQL Server through a shared connection configuration
+(src/config/servers.json).  Agents should follow this discovery flow:
+
+  1. No server known?  → POST /search_objects with no 'server' field
+                          → response contains 'available_servers'
+  2. Server is SQL Server, no database?
+                        → POST /search_objects with 'server' but no 'database'
+                          → response contains 'available_databases'
+  3. All info known?  → POST /search_objects / POST /describe_object / POST /search_and_describe
+
+Discovery endpoints (GET):
+  GET /servers
+  GET /servers/{server_name}/databases
+  GET /servers/{server_name}/schemas
 """
 import sys
 import os
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
 from typing import Optional
 
-# Add the services directory to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'services', 'dataObjectQueryService'))
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, Field
 
-from oracle_query_service import OracleQueryService
+# ---------------------------------------------------------------------------
+# Path setup — import services as a proper package to enable relative imports
+# ---------------------------------------------------------------------------
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "services"))
 
+from dataObjectQueryService.connection_manager import ConnectionManager, ServerNotFoundError  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
 app = FastAPI(
-    title="Oracle Database Tool Server",
-    description="A server with Oracle database query tools for Open-WebUI",
-    version="1.0.0"
+    title="Database Object Query Tool Server",
+    description=(
+        "Query Oracle and SQL Server schemas to discover tables, views, and their "
+        "column definitions. Supports multiple named server connections.\n\n"
+        "**Discovery flow (for agents with no prior context):**\n"
+        "1. `POST /search_objects` with no `server` → get `available_servers`\n"
+        "2. If SQL Server: `POST /search_objects` with `server` but no `database` → get `available_databases`\n"
+        "3. `POST /search_objects` with full context → get matching objects\n"
+        "4. `POST /describe_object` → get column definitions\n"
+    ),
+    version="2.0.0",
 )
 
-class DescribeObjectRequest(BaseModel):
-    object_name: str = Field(..., description="Name of the Oracle database object (table, view, etc.) to describe")
-    owner: Optional[str] = Field(None, description="Optional schema owner (defaults to current user)")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class DescribeObjectResponse(BaseModel):
-    result: str
-    object_name: str
-    owner: Optional[str]
+# ---------------------------------------------------------------------------
+# Dependency — lazy singleton ConnectionManager
+# ---------------------------------------------------------------------------
+_manager: Optional[ConnectionManager] = None
+
+
+def get_manager() -> ConnectionManager:
+    global _manager
+    if _manager is None:
+        _manager = ConnectionManager()
+    return _manager
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+class ServerInfo(BaseModel):
+    name: str
+    type: str
+
+
+class SearchResult(BaseModel):
+    schema_name: str = Field(..., description="Schema / owner that contains this object")
+    name: str        = Field(..., description="Object name")
+    type: str        = Field(..., description="Object type, e.g. TABLE or VIEW")
+    match_type: str  = Field(..., description="How the pattern matched: exact | prefix | substring | comment")
+    full_name: str   = Field(..., description="Convenience: schema_name.name")
+
 
 class SearchObjectsRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     pattern: str = Field(
-        ..., 
-        description="Search pattern for object names (e.g., 'patient' will find all objects with 'patient' in the name)",
-        examples=["patient", "emp", "order"]
+        ...,
+        description=(
+            "Search pattern — partial names work, wildcards are added automatically. "
+            "E.g. 'patient' finds PATIENT, PAT_ENC, INPATIENT_VISIT."
+        ),
+        examples=["patient", "order", "medication"],
     )
     object_type: Optional[str] = Field(
-        None, 
-        description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)",
-        examples=["TABLE", "VIEW"]
+        None,
+        description="Optionally restrict to TABLE, VIEW, PROCEDURE, FUNCTION, etc.",
+        examples=["TABLE", "VIEW"],
     )
-    owner: Optional[str] = Field(
-        None, 
-        description="Optional schema owner filter",
-        examples=["MYSCHEMA", "HR"]
+    db_schema: Optional[str] = Field(
+        None,
+        alias="schema",
+        description="Optionally restrict to a specific schema / owner.",
+        examples=["CLARITY", "dbo"],
     )
+    server: Optional[str] = Field(
+        None,
+        description=(
+            "Name of the server connection as defined in servers.json. "
+            "Omit to receive a list of available servers."
+        ),
+        examples=["oracle-local", "sqlserver-local"],
+    )
+    database: Optional[str] = Field(
+        None,
+        description=(
+            "SQL Server only: the database to search in. "
+            "Omit (with a SQL Server server) to receive a list of available databases. "
+            "Ignored for Oracle."
+        ),
+        examples=["CLARITY", "AdventureWorks"],
+    )
+
 
 class SearchObjectsResponse(BaseModel):
-    objects: list[str]
-    count: int
     pattern: str
+    server: Optional[str]                     = None
+    database: Optional[str]                   = None
+    objects: Optional[list[SearchResult]]     = None
+    count: Optional[int]                      = None
+    available_servers: Optional[list[ServerInfo]] = None
+    available_databases: Optional[list[str]]  = None
+    message: Optional[str]                    = None
+
+
+class DescribeObjectRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_name: str = Field(
+        ...,
+        description=(
+            "Name of the database object. Accepts schema-qualified names "
+            "(e.g. CLARITY.PATIENT or dbo.Patient)."
+        ),
+        examples=["PATIENT", "CLARITY.PAT_ENC", "dbo.Patient"],
+    )
+    db_schema: Optional[str] = Field(
+        None,
+        alias="schema",
+        description="Schema / owner (optional if included in object_name).",
+        examples=["CLARITY", "dbo"],
+    )
+    server: Optional[str] = Field(
+        None,
+        description="Name of the server connection. Omit to receive available servers.",
+        examples=["oracle-local", "sqlserver-local"],
+    )
+    database: Optional[str] = Field(
+        None,
+        description="SQL Server only: database context. Ignored for Oracle.",
+        examples=["CLARITY"],
+    )
+
+
+class DescribeObjectResponse(BaseModel):
+    object_name: str
+    db_schema: Optional[str]     = Field(None, alias="schema")
+    server: Optional[str]    = None
+    database: Optional[str]  = None
+    result: Optional[str]    = None
+    available_servers: Optional[list[ServerInfo]] = None
+    available_databases: Optional[list[str]]      = None
+    message: Optional[str]                        = None
+
 
 class SearchAndDescribeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     pattern: str = Field(
-        ..., 
-        description="Search pattern for object names (e.g., 'patient' will find all objects with 'patient' in the name)",
-        examples=["patient", "emp", "order"]
+        ...,
+        description="Search pattern — same as /search_objects.",
+        examples=["patient", "order"],
     )
-    object_type: Optional[str] = Field(
-        None, 
-        description="Optional filter by object type (TABLE, VIEW, SEQUENCE, etc.)",
-        examples=["TABLE", "VIEW"]
-    )
-    owner: Optional[str] = Field(
-        None, 
-        description="Optional schema owner filter",
-        examples=["MYSCHEMA", "HR"]
-    )
+    object_type: Optional[str] = Field(None, examples=["TABLE"])
+    db_schema: Optional[str]   = Field(None, alias="schema", examples=["CLARITY", "dbo"])
+    server: Optional[str]      = Field(None, examples=["oracle-local", "sqlserver-local"])
+    database: Optional[str]    = Field(None, examples=["CLARITY"])
     describe_all: bool = Field(
-        False, 
-        description="If True, describes all matching objects. If False, only describes the first match"
+        False,
+        description="If True, describe all matching objects. If False (default), describe only the first match.",
     )
+
 
 class SearchAndDescribeResponse(BaseModel):
-    objects: list[str]
-    count: int
     pattern: str
-    descriptions: dict[str, str]
+    server: Optional[str]                     = None
+    database: Optional[str]                   = None
+    objects: Optional[list[SearchResult]]     = None
+    count: Optional[int]                      = None
+    descriptions: Optional[dict[str, str]]    = None
+    available_servers: Optional[list[ServerInfo]] = None
+    available_databases: Optional[list[str]]  = None
+    message: Optional[str]                    = None
 
-@app.get("/")
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _to_search_results(raw: list[dict]) -> list[SearchResult]:
+    return [
+        SearchResult(
+            schema_name=r["schema"],
+            name=r["name"],
+            type=r["type"],
+            match_type=r["match_type"],
+            full_name=f"{r['schema']}.{r['name']}",
+        )
+        for r in raw
+    ]
+
+
+def _guidance_no_server(manager: ConnectionManager, pattern: str) -> SearchObjectsResponse:
+    servers = [ServerInfo(**s) for s in manager.list_servers()]
+    return SearchObjectsResponse(
+        pattern=pattern,
+        available_servers=servers,
+        message=(
+            "No server specified. Please include a 'server' field in your request "
+            "using one of the available server names listed in 'available_servers'."
+        ),
+    )
+
+
+def _guidance_no_database(
+    manager: ConnectionManager, server: str, pattern: str
+) -> SearchObjectsResponse:
+    service = manager.get_service(server)
+    service.connect()
+    databases = service.list_databases()
+    service.disconnect()
+    return SearchObjectsResponse(
+        pattern=pattern,
+        server=server,
+        available_databases=databases,
+        message=(
+            f"Server '{server}' is a SQL Server instance that requires a database selection. "
+            "Please include a 'database' field in your request using one of the values "
+            "listed in 'available_databases'."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Info endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/", tags=["info"])
 def root():
     return {
-        "message": "Oracle Database Tool Server",
-        "docs": "/docs",
-        "openapi": "/openapi.json"
+        "message": "Database Object Query Tool Server",
+        "docs":    "/docs",
+        "openapi": "/openapi.json",
+        "version": "2.0.0",
     }
 
-@app.post("/search_objects", response_model=SearchObjectsResponse, tags=["tools"])
-def search_objects(request: SearchObjectsRequest):
-    """
-    Search for Oracle database objects matching a pattern.
-    Use this to discover objects before describing them.
-    
-    Example request body:
-    {
-        "pattern": "patient",
-        "object_type": "TABLE",
-        "owner": "MYSCHEMA"
-    }
-    
-    Or minimal:
-    {
-        "pattern": "patient"
-    }
-    """
-    try:
-        service = OracleQueryService()
-        service.connect()
-        
-        objects = service.search_objects(
-            pattern=request.pattern,
-            object_type=request.object_type,
-            owner=request.owner
-        )
-        
-        service.disconnect()
-        
-        return SearchObjectsResponse(
-            objects=objects,
-            count=len(objects),
-            pattern=request.pattern
-        )
-    except Exception as e:
-        error_message = (
-            f"ERROR occurred while searching for database objects with pattern '{request.pattern}': {str(e)}\n\n"
-            f"INSTRUCTIONS FOR LLM: Please inform the user about this error in a clear and helpful way. "
-            f"Explain what went wrong and suggest potential solutions such as:\n"
-            f"- Verify database connectivity is working\n"
-            f"- Check if the schema/owner name is correct (if specified)\n"
-            f"- Ensure you have appropriate permissions to query the data dictionary\n"
-            f"- Try a different search pattern"
-        )
-        raise HTTPException(status_code=500, detail=error_message)
 
-@app.post("/describe_object", response_model=DescribeObjectResponse, tags=["tools"])
-def describe_object(request: DescribeObjectRequest):
-    """
-    Describe an Oracle database object (table, view, etc.).
-    Returns column information similar to SQL*Plus DESCRIBE command.
-    
-    Example request body:
-    {
-        "object_name": "PATIENTS",
-        "owner": "MYSCHEMA"
-    }
-    
-    Or use schema-qualified name:
-    {
-        "object_name": "MYSCHEMA.PATIENTS"
-    }
-    """
-    try:
-        service = OracleQueryService()
-        service.connect()
-        
-        result = service.describe_object(
-            object_name=request.object_name,
-            owner=request.owner
-        )
-        
-        service.disconnect()
-        
-        return DescribeObjectResponse(
-            result=result,
-            object_name=request.object_name,
-            owner=request.owner
-        )
-    except Exception as e:
-        error_message = (
-            f"ERROR occurred while describing database object '{request.object_name}': {str(e)}\n\n"
-            f"INSTRUCTIONS FOR LLM: Please inform the user about this error in a clear and helpful way. "
-            f"Explain what went wrong and suggest potential solutions such as:\n"
-            f"- Verify the object name is correct and exists in the database\n"
-            f"- Check if the schema/owner name is correct (if specified)\n"
-            f"- Ensure database connectivity is working\n"
-            f"- Verify you have appropriate permissions to access this object"
-        )
-        raise HTTPException(status_code=500, detail=error_message)
-
-@app.post("/search_and_describe", response_model=SearchAndDescribeResponse, tags=["tools"])
-def search_and_describe(request: SearchAndDescribeRequest):
-    """
-    Search for Oracle database objects matching a pattern and describe them.
-    This combines search and describe operations in one step for convenience.
-    
-    Example request body:
-    {
-        "pattern": "patient",
-        "object_type": "TABLE",
-        "owner": "MYSCHEMA",
-        "describe_all": false
-    }
-    
-    Or minimal (describes only first match):
-    {
-        "pattern": "patient"
-    }
-    
-    Note: All parameters must be sent in the request BODY as JSON, not as query parameters.
-    """
-    try:
-        service = OracleQueryService()
-        service.connect()
-        
-        # First, search for matching objects
-        objects = service.search_objects(
-            pattern=request.pattern,
-            object_type=request.object_type,
-            owner=request.owner
-        )
-        
-        # Then describe the matching objects
-        descriptions = {}
-        
-        if objects:
-            # Determine how many objects to describe
-            objects_to_describe = objects if request.describe_all else objects[:1]
-            
-            for obj_str in objects_to_describe:
-                # Parse the object string (format: "Table Name: OWNER.OBJECT_NAME")
-                parts = obj_str.split(": ", 1)
-                if len(parts) == 2:
-                    full_name = parts[1]  # This is "OWNER.OBJECT_NAME"
-                    
-                    # Describe the object (the service handles schema-qualified names)
-                    description = service.describe_object(full_name)
-                    descriptions[full_name] = description
-        
-        service.disconnect()
-        
-        return SearchAndDescribeResponse(
-            objects=objects,
-            count=len(objects),
-            pattern=request.pattern,
-            descriptions=descriptions
-        )
-    except Exception as e:
-        error_message = (
-            f"ERROR occurred while finding and describing database objects with pattern '{request.pattern}': {str(e)}\n\n"
-            f"INSTRUCTIONS FOR LLM: Please inform the user about this error in a clear and helpful way. "
-            f"Explain what went wrong and suggest potential solutions such as:\n"
-            f"- Verify database connectivity is working\n"
-            f"- Check if the schema/owner name is correct (if specified)\n"
-            f"- Ensure you have appropriate permissions to query the data dictionary\n"
-            f"- Try a different search pattern\n"
-            f"- Check if the matching objects exist and are accessible"
-        )
-        raise HTTPException(status_code=500, detail=error_message)
-
-@app.get("/health")
+@app.get("/health", tags=["info"])
 def health():
     return {"status": "healthy"}
+
+
+@app.get("/servers", response_model=list[ServerInfo], tags=["discovery"])
+def list_servers(manager: ConnectionManager = Depends(get_manager)):
+    """List all configured database server connections."""
+    return [ServerInfo(**s) for s in manager.list_servers()]
+
+
+@app.get(
+    "/servers/{server_name}/databases",
+    tags=["discovery"],
+    summary="List databases on a server",
+)
+def list_databases(
+    server_name: str,
+    manager: ConnectionManager = Depends(get_manager),
+):
+    """
+    List available databases on the specified server.
+
+    For SQL Server: returns a list of database names.
+    For Oracle: returns an empty list with an explanatory note
+                (Oracle uses schemas/owners, not databases).
+    """
+    try:
+        server_type = manager.get_server_type(server_name)
+        service = manager.get_service(server_name)
+        service.connect()
+        databases = service.list_databases()
+        service.disconnect()
+        if server_type == "oracle":
+            return {
+                "server": server_name,
+                "type": "oracle",
+                "databases": [],
+                "note": (
+                    "Oracle does not use the database/catalog concept. "
+                    "Use GET /servers/{server_name}/schemas to list Oracle schemas."
+                ),
+            }
+        return {"server": server_name, "type": server_type, "databases": databases}
+    except ServerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get(
+    "/servers/{server_name}/schemas",
+    tags=["discovery"],
+    summary="List schemas on a server",
+)
+def list_schemas(
+    server_name: str,
+    database: Optional[str] = None,
+    manager: ConnectionManager = Depends(get_manager),
+):
+    """
+    List schemas for the specified server.
+
+    For SQL Server, provide the *database* query parameter to list schemas
+    within that database.
+    """
+    try:
+        server_type = manager.get_server_type(server_name)
+        service = manager.get_service(server_name, database=database)
+        service.connect()
+        schemas = service.list_schemas()
+        service.disconnect()
+        return {
+            "server":   server_name,
+            "type":     server_type,
+            "database": database,
+            "schemas":  schemas,
+        }
+    except ServerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Tool endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/search_objects", response_model=SearchObjectsResponse, tags=["tools"])
+def search_objects(
+    request: SearchObjectsRequest,
+    manager: ConnectionManager = Depends(get_manager),
+):
+    """
+    Search for database objects (tables, views, etc.) matching a pattern.
+
+    **Discovery behaviour:**
+    - Omit `server` → response contains `available_servers` list.
+    - For SQL Server, omit `database` → response contains `available_databases` list.
+    - Provide both → returns matching objects sorted by relevance.
+
+    Pattern matching is automatic: the API searches for exact, prefix, and substring
+    matches on object *names*, plus any description/comment metadata.
+    You do **not** need to add `%` wildcards.
+    """
+    try:
+        if not request.server:
+            return _guidance_no_server(manager, request.pattern)
+
+        server_type = manager.get_server_type(request.server)
+
+        if server_type == "sqlserver" and not request.database:
+            return _guidance_no_database(manager, request.server, request.pattern)
+
+        service = manager.get_service(request.server, request.database)
+        service.connect()
+        raw = service.search_objects(
+            pattern=request.pattern,
+            object_type=request.object_type,
+            schema=request.db_schema,
+        )
+        service.disconnect()
+
+        objects = _to_search_results(raw)
+        return SearchObjectsResponse(
+            pattern=request.pattern,
+            server=request.server,
+            database=request.database,
+            objects=objects,
+            count=len(objects),
+        )
+
+    except ServerNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"{exc}\n\nCall GET /servers to see all configured server names."
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Error searching for objects with pattern '{request.pattern}': {exc}\n\n"
+                "Check database connectivity and verify the schema/server parameters."
+            ),
+        )
+
+
+@app.post("/describe_object", response_model=DescribeObjectResponse, tags=["tools"])
+def describe_object(
+    request: DescribeObjectRequest,
+    manager: ConnectionManager = Depends(get_manager),
+):
+    """
+    Describe the structure (columns) of a database table or view.
+
+    Accepts schema-qualified names: ``CLARITY.PATIENT`` or ``dbo.Patient``.
+
+    **Discovery behaviour:**
+    - Omit `server` → response contains `available_servers` list.
+    - For SQL Server, omit `database` → response contains `available_databases` list.
+    """
+    try:
+        if not request.server:
+            servers = [ServerInfo(**s) for s in manager.list_servers()]
+            return DescribeObjectResponse(
+                object_name=request.object_name,
+                available_servers=servers,
+                message=(
+                    "No server specified. Include a 'server' field using one of "
+                    "the available server names listed in 'available_servers'."
+                ),
+            )
+
+        server_type = manager.get_server_type(request.server)
+
+        if server_type == "sqlserver" and not request.database:
+            service = manager.get_service(request.server)
+            service.connect()
+            databases = service.list_databases()
+            service.disconnect()
+            return DescribeObjectResponse(
+                object_name=request.object_name,
+                server=request.server,
+                available_databases=databases,
+                message=(
+                    f"Server '{request.server}' requires a database selection. "
+                    "Include a 'database' field using one of 'available_databases'."
+                ),
+            )
+
+        service = manager.get_service(request.server, request.database)
+        service.connect()
+        result = service.describe_object(request.object_name, schema=request.db_schema)
+        service.disconnect()
+
+        return DescribeObjectResponse(
+            object_name=request.object_name,
+            db_schema=request.db_schema,
+            server=request.server,
+            database=request.database,
+            result=result,
+        )
+
+    except ServerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Error describing object '{request.object_name}': {exc}\n\n"
+                "Verify the object name and schema are correct and that you have access."
+            ),
+        )
+
+
+@app.post("/search_and_describe", response_model=SearchAndDescribeResponse, tags=["tools"])
+def search_and_describe(
+    request: SearchAndDescribeRequest,
+    manager: ConnectionManager = Depends(get_manager),
+):
+    """
+    Search for objects matching a pattern **and** describe the results in one call.
+
+    Set ``describe_all=true`` to describe every match; default is the first match only.
+
+    Same discovery behaviour as ``/search_objects``.
+    """
+    try:
+        if not request.server:
+            servers = [ServerInfo(**s) for s in manager.list_servers()]
+            return SearchAndDescribeResponse(
+                pattern=request.pattern,
+                available_servers=servers,
+                message=(
+                    "No server specified. Include a 'server' field using one of "
+                    "the available server names in 'available_servers'."
+                ),
+            )
+
+        server_type = manager.get_server_type(request.server)
+
+        if server_type == "sqlserver" and not request.database:
+            service = manager.get_service(request.server)
+            service.connect()
+            databases = service.list_databases()
+            service.disconnect()
+            return SearchAndDescribeResponse(
+                pattern=request.pattern,
+                server=request.server,
+                available_databases=databases,
+                message=(
+                    f"Server '{request.server}' requires a database selection. "
+                    "Include a 'database' field using one of 'available_databases'."
+                ),
+            )
+
+        service = manager.get_service(request.server, request.database)
+        service.connect()
+
+        raw = service.search_objects(
+            pattern=request.pattern,
+            object_type=request.object_type,
+            schema=request.db_schema,
+        )
+
+        objects = _to_search_results(raw)
+        to_describe = raw if request.describe_all else raw[:1]
+
+        descriptions: dict[str, str] = {}
+        for obj in to_describe:
+            full_name = f"{obj['schema']}.{obj['name']}"
+            descriptions[full_name] = service.describe_object(
+                obj["name"], schema=obj["schema"]
+            )
+
+        service.disconnect()
+
+        return SearchAndDescribeResponse(
+            pattern=request.pattern,
+            server=request.server,
+            database=request.database,
+            objects=objects,
+            count=len(objects),
+            descriptions=descriptions,
+        )
+
+    except ServerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Error during search_and_describe with pattern '{request.pattern}': {exc}\n\n"
+                "Verify database connectivity and parameter values."
+            ),
+        )
+
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
+

@@ -32,6 +32,13 @@ venv.bak/
 
 # Environment variables
 .env
+.env.*
+
+# Server connection config (contains credentials — use servers.example.json as template)
+src/config/servers.json
+
+# Windows venv
+.venv-win/
 
 # IDEs
 .vscode/

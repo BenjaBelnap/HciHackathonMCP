@@ -1,0 +1,35 @@
+{
+  "_comment": "Copy this file to servers.json and fill in your connection details.",
+  "servers": {
+    "oracle-local": {
+      "type": "oracle",
+      "host": "localhost",
+      "port": 1521,
+      "service_name": "XEPDB1",
+      "username": "CLARITY",
+      "password": "Clarity123"
+    },
+    "oracle-prod": {
+      "type": "oracle",
+      "host": "prod-oracle.example.com",
+      "port": 1521,
+      "service_name": "PRODDB1",
+      "username": "APP_USER",
+      "password": "CHANGE_ME"
+    },
+    "sqlserver-local": {
+      "type": "sqlserver",
+      "host": "localhost",
+      "port": 1433,
+      "username": "sa",
+      "password": "SqlPassword123!"
+    },
+    "sqlserver-prod": {
+      "type": "sqlserver",
+      "host": "prod-sqlserver.example.com",
+      "port": 1433,
+      "username": "app_user",
+      "password": "CHANGE_ME"
+    }
+  }
+}

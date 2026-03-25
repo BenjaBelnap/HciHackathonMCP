@@ -1,0 +1,7 @@
+# Test dependencies
+pytest>=7.4.0
+httpx>=0.24.0
+fastapi==0.115.0
+pydantic==2.9.2
+oracledb>=2.0.0
+pymssql>=2.3.0

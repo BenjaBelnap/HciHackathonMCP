@@ -1,239 +1,231 @@
 """
 Oracle Database Query Service
-Queries Oracle database object information using DESCRIBE
+
+Queries Oracle data-dictionary views to return object metadata.
+Uses oracledb thin-mode — no Oracle Client installation required.
 """
-import os
-import oracledb
-from dotenv import load_dotenv
 from typing import Optional
 
+import oracledb
 
-class OracleQueryService:
-    """Service to query Oracle database object information"""
-    
-    def __init__(self):
-        """Initialize the Oracle connection using environment variables"""
-        load_dotenv()
-        
-        self.username = os.getenv('ORACLE_USERNAME')
-        self.password = os.getenv('ORACLE_PASSWORD')
-        self.host = os.getenv('ORACLE_HOST')
-        self.port = os.getenv('ORACLE_PORT', '1521')
-        self.service_name = os.getenv('ORACLE_SERVICE_NAME')
-        
-        self._validate_config()
+from .database_query_service import DatabaseQueryService
+
+# Object types accepted for the object_type filter
+_ALLOWED_ORACLE_TYPES = {
+    "TABLE", "VIEW", "SEQUENCE", "PROCEDURE", "FUNCTION",
+    "PACKAGE", "INDEX", "SYNONYM", "TRIGGER", "TYPE",
+}
+
+
+class OracleQueryService(DatabaseQueryService):
+    """Queries Oracle database object metadata."""
+
+    def __init__(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        service_name: str,
+        port: int = 1521,
+    ):
+        self.host = host
+        self.port = int(port)
+        self.username = username
+        self.password = password
+        self.service_name = service_name
         self.connection = None
     
-    def _validate_config(self):
-        """Validate that all required configuration is present"""
-        required_vars = ['ORACLE_USERNAME', 'ORACLE_PASSWORD', 'ORACLE_HOST', 'ORACLE_SERVICE_NAME']
-        missing = [var for var in required_vars if not os.getenv(var)]
-        
-        if missing:
-            raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
-    
-    def connect(self):
-        """Establish connection to Oracle database"""
-        try:
-            dsn = oracledb.makedsn(
-                self.host,
-                self.port,
-                service_name=self.service_name
-            )
-            
-            self.connection = oracledb.connect(
-                user=self.username,
-                password=self.password,
-                dsn=dsn
-            )
-            print(f"Successfully connected to Oracle database at {self.host}")
-            return True
-        except Exception as e:
-            print(f"Error connecting to Oracle database: {e}")
-            raise
-    
-    def disconnect(self):
-        """Close the database connection"""
+    # ------------------------------------------------------------------ #
+    # Connection management                                                #
+    # ------------------------------------------------------------------ #
+
+    def connect(self) -> None:
+        dsn = oracledb.makedsn(self.host, self.port, service_name=self.service_name)
+        self.connection = oracledb.connect(
+            user=self.username,
+            password=self.password,
+            dsn=dsn,
+        )
+
+    def disconnect(self) -> None:
         if self.connection:
             self.connection.close()
-            print("Database connection closed")
-    
-    def search_objects(self, pattern: str, object_type: Optional[str] = None, owner: Optional[str] = None) -> list:
+            self.connection = None
+
+    # ------------------------------------------------------------------ #
+    # Discovery                                                            #
+    # ------------------------------------------------------------------ #
+
+    def list_databases(self) -> list[str]:
+        """Oracle does not use the database/catalog concept. Always returns []."""
+        return []
+
+    def list_schemas(self) -> list[str]:
+        """List all Oracle schemas that own at least one object."""
+        if not self.connection:
+            self.connect()
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "SELECT DISTINCT owner FROM all_objects ORDER BY owner"
+        )
+        schemas = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        return schemas
+
+    # ------------------------------------------------------------------ #
+    # Search                                                               #
+    # ------------------------------------------------------------------ #
+
+    def search_objects(
+        self,
+        pattern: str,
+        object_type: Optional[str] = None,
+        schema: Optional[str] = None,
+    ) -> list[dict]:
         """
-        Search for database objects matching a pattern
-        
-        Args:
-            pattern: Search pattern (e.g., 'patient' will find objects like '%PATIENT%')
-            object_type: Optional filter by object type (TABLE, VIEW, etc.)
-            owner: Optional schema owner filter
-            
-        Returns:
-            List of dictionaries with object information
+        Search for Oracle objects by name and comment metadata.
+
+        Results are ordered by match quality: exact → prefix → substring → comment.
+        Wildcards are added automatically — do not include them in *pattern*.
         """
         if not self.connection:
             self.connect()
-        
-        try:
-            cursor = self.connection.cursor()
-            
-            # Build query to search for objects
-            query = """
-                SELECT DISTINCT
-                    owner,
-                    object_name,
-                    object_type
-                FROM all_objects
-                WHERE object_name LIKE :pattern
+
+        upper_pattern = pattern.upper().strip("%")
+        if object_type:
+            object_type = object_type.upper()
+            if object_type not in _ALLOWED_ORACLE_TYPES:
+                raise ValueError(
+                    f"Invalid object_type '{object_type}'. "
+                    f"Allowed values: {sorted(_ALLOWED_ORACLE_TYPES)}"
+                )
+
+        cursor = self.connection.cursor()
+        results: list[dict] = []
+        seen: set[tuple] = set()
+
+        schema_clause = "AND owner = :schema" if schema else ""
+        schema_param: dict = {"schema": schema.upper()} if schema else {}
+
+        if object_type:
+            type_clause = "AND object_type = :otype"
+            type_param: dict = {"otype": object_type}
+        else:
+            type_clause = "AND object_type IN ('TABLE', 'VIEW')"
+            type_param = {}
+
+        base_params = {**type_param, **schema_param}
+
+        # -- Name searches (exact, prefix, substring) --------------------
+        for match_label, pat in [
+            ("exact",     upper_pattern),
+            ("prefix",    upper_pattern + "%"),
+            ("substring", "%" + upper_pattern + "%"),
+        ]:
+            query = f"""
+                SELECT DISTINCT owner, object_name, object_type
+                FROM   all_objects
+                WHERE  object_name LIKE :pattern
+                  {type_clause}
+                  {schema_clause}
+                ORDER BY owner, object_type, object_name
             """
-            
-            # Add wildcards to pattern
-            search_pattern = f"%{pattern.upper()}%"
-            params = {'pattern': search_pattern}
-            
-            if object_type:
-                query += " AND object_type = :object_type"
-                params['object_type'] = object_type.upper()
-            else:
-                # Default to only tables and views if no type specified
-                query += " AND object_type IN ('TABLE', 'VIEW')"
-            
-            if owner:
-                query += " AND owner = :owner"
-                params['owner'] = owner.upper()
-            
-            query += " ORDER BY owner, object_type, object_name"
-            
-            cursor.execute(query, params)
-            results = cursor.fetchall()
-            
-            # Format results as simple strings for LLM efficiency
-            objects = [
-                f"{row[2].title()} Name: {row[0]}.{row[1]}"
-                for row in results
+            cursor.execute(query, {"pattern": pat, **base_params})
+            for row in cursor.fetchall():
+                key = (row[0], row[1])
+                if key not in seen:
+                    seen.add(key)
+                    results.append({
+                        "schema": row[0],
+                        "name":   row[1],
+                        "type":   row[2],
+                        "match_type": match_label,
+                    })
+
+        # -- Comment/description searches --------------------------------
+        if object_type in (None, "TABLE", "VIEW"):
+            comment_params = {"pattern": "%" + upper_pattern + "%", **base_params}
+            owner_col_map = [
+                ("all_tab_comments", "tc", "owner",  "table_name"),
+                ("all_col_comments", "cc", "owner",  "table_name"),
             ]
-            
-            cursor.close()
-            return objects
-            
-        except Exception as e:
-            raise Exception(f"Error searching for objects: {e}")
-    
-    def describe_object(self, object_name: str, owner: Optional[str] = None) -> str:
-        """
-        Describe an Oracle database object (table, view, etc.)
-        Returns a formatted string similar to SQL*Plus DESCRIBE output
-        
-        Args:
-            object_name: Name of the database object to describe (can be schema-qualified like SCHEMA.TABLE)
-            owner: Optional schema owner (defaults to current user)
-            
-        Returns:
-            Formatted string with DESCRIBE output
-        """
-        # Parse schema-qualified names (e.g., "SCHEMA.TABLE")
-        if '.' in object_name and owner is None:
-            parts = object_name.split('.', 1)  # Split on first dot only
-            owner = parts[0]
-            object_name = parts[1]
-        
+            for tbl, alias, owner_col, name_col in owner_col_map:
+                q = f"""
+                    SELECT DISTINCT {alias}.{owner_col}, {alias}.{name_col}, ao.object_type
+                    FROM   {tbl} {alias}
+                    JOIN   all_objects ao
+                           ON  ao.owner       = {alias}.{owner_col}
+                           AND ao.object_name = {alias}.{name_col}
+                    WHERE  UPPER({alias}.comments) LIKE :pattern
+                      {type_clause}
+                      {'AND ' + alias + '.' + owner_col + ' = :schema' if schema else ''}
+                    ORDER BY {alias}.{owner_col}, ao.object_type, {alias}.{name_col}
+                """
+                cursor.execute(q, comment_params)
+                for row in cursor.fetchall():
+                    key = (row[0], row[1])
+                    if key not in seen:
+                        seen.add(key)
+                        results.append({
+                            "schema": row[0],
+                            "name":   row[1],
+                            "type":   row[2],
+                            "match_type": "comment",
+                        })
+
+        cursor.close()
+        return results
+
+    # ------------------------------------------------------------------ #
+    # Describe                                                             #
+    # ------------------------------------------------------------------ #
+
+    def describe_object(self, object_name: str, schema: Optional[str] = None) -> str:
+        """Return SQL*Plus–style DESCRIBE output for an Oracle table or view."""
+        if "." in object_name and schema is None:
+            schema, object_name = object_name.split(".", 1)
+
         if not self.connection:
             self.connect()
-        
-        try:
-            cursor = self.connection.cursor()
-            
-            # Query to get column information (equivalent to DESCRIBE)
-            query = """
-                SELECT 
-                    column_name,
-                    nullable,
-                    data_type,
-                    data_length,
-                    data_precision,
-                    data_scale
-                FROM all_tab_columns
-                WHERE table_name = :object_name
-            """
-            
-            params = {'object_name': object_name.upper()}
-            
-            if owner:
-                query += " AND owner = :owner"
-                params['owner'] = owner.upper()
-            
-            query += " ORDER BY column_id"
-            
-            cursor.execute(query, params)
-            columns = cursor.fetchall()
-            
-            if not columns:
-                return f"Object '{object_name}' not found"
-            
-            # Format output similar to DESCRIBE command
-            output = []
-            output.append("Name          Null? Type         ")
-            output.append("------------- ----- ------------ ")
-            
-            for col in columns:
-                col_name = col[0]
-                nullable = "" if col[1] == 'Y' else "NOT NULL"
-                data_type = col[2]
-                data_length = col[3]
-                data_precision = col[4]
-                data_scale = col[5]
-                
-                # Format type string
-                if data_type in ['VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR', 'RAW']:
-                    type_str = f"{data_type}({data_length})"
-                elif data_type == 'NUMBER':
-                    if data_precision is not None:
-                        if data_scale is not None and data_scale > 0:
-                            type_str = f"{data_type}({data_precision},{data_scale})"
-                        else:
-                            type_str = f"{data_type}({data_precision})"
+
+        cursor = self.connection.cursor()
+        query = """
+            SELECT column_name, nullable, data_type,
+                   data_length, data_precision, data_scale
+            FROM   all_tab_columns
+            WHERE  table_name = :object_name
+        """
+        params: dict = {"object_name": object_name.upper()}
+        if schema:
+            query += " AND owner = :schema"
+            params["schema"] = schema.upper()
+        query += " ORDER BY column_id"
+
+        cursor.execute(query, params)
+        columns = cursor.fetchall()
+        cursor.close()
+
+        if not columns:
+            return f"Object '{object_name}' not found or no columns accessible."
+
+        output = [
+            "Name                           Null?    Type",
+            "------------------------------- -------- ----------------------------",
+        ]
+        for col_name, nullable, data_type, data_length, data_precision, data_scale in columns:
+            null_str = "NOT NULL" if nullable == "N" else ""
+            if data_type in ("VARCHAR2", "CHAR", "NVARCHAR2", "NCHAR", "RAW"):
+                type_str = f"{data_type}({data_length})"
+            elif data_type == "NUMBER":
+                if data_precision is not None:
+                    if data_scale is not None and data_scale > 0:
+                        type_str = f"NUMBER({data_precision},{data_scale})"
                     else:
-                        type_str = data_type
+                        type_str = f"NUMBER({data_precision})"
                 else:
-                    type_str = data_type
-                
-                # Format line with proper spacing
-                line = f"{col_name:<13} {nullable:<5} {type_str}"
-                output.append(line)
-            
-            cursor.close()
-            return "\n".join(output)
-            
-        except Exception as e:
-            return f"Error describing object '{object_name}': {e}"
-    
-    def __enter__(self):
-        """Context manager entry"""
-        self.connect()
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
-        self.disconnect()
+                    type_str = "NUMBER"
+            else:
+                type_str = data_type
+            output.append(f"{col_name:<31} {null_str:<8} {type_str}")
 
-
-def main():
-    """Example usage of the OracleQueryService"""
-    service = OracleQueryService()
-    
-    try:
-        service.connect()
-        
-        # Describe a table
-        object_name = input("Enter object name to describe: ")
-        result = service.describe_object(object_name)
-        
-        print("\n" + result)
-            
-    finally:
-        service.disconnect()
-
-
-if __name__ == "__main__":
-    main()
-
-    main()
+        return "\n".join(output)
