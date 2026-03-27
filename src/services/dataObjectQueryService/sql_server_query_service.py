@@ -36,16 +36,18 @@ class SqlServerQueryService(DatabaseQueryService):
     def __init__(
         self,
         host: str,
-        username: str,
-        password: str,
         port: int = 1433,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
         database: Optional[str] = None,
+        windows_auth: bool = False,
     ):
         self.host = host
         self.port = int(port)
         self.username = username
         self.password = password
         self.database = database
+        self.windows_auth = windows_auth
         self.connection = None
 
     # ------------------------------------------------------------------ #
@@ -53,11 +55,12 @@ class SqlServerQueryService(DatabaseQueryService):
     # ------------------------------------------------------------------ #
 
     def connect(self) -> None:
-        kwargs: dict = {
-            "server": f"{self.host}:{self.port}",
-            "user":   self.username,
-            "password": self.password,
-        }
+        kwargs: dict = {"server": f"{self.host}:{self.port}"}
+        if self.windows_auth:
+            kwargs["trusted_connection"] = True
+        else:
+            kwargs["user"] = self.username
+            kwargs["password"] = self.password
         if self.database:
             kwargs["database"] = self.database
         self.connection = pymssql.connect(**kwargs)

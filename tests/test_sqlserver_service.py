@@ -79,6 +79,28 @@ class TestConnect:
                 assert s is svc
             mock_db.connect.return_value.close.assert_called_once()
 
+    def test_connect_with_windows_auth(self):
+        svc = SqlServerQueryService(host="localhost", port=1433, windows_auth=True)
+        with patch("dataObjectQueryService.sql_server_query_service.pymssql") as mock_db:
+            mock_db.connect.return_value = MagicMock()
+            svc.connect()
+            call_kwargs = mock_db.connect.call_args.kwargs
+            assert call_kwargs.get("trusted_connection") is True
+            assert "user" not in call_kwargs
+            assert "password" not in call_kwargs
+
+    def test_connect_sql_login_unaffected(self):
+        svc = _make_service(windows_auth=False)
+        with patch("dataObjectQueryService.sql_server_query_service.pymssql") as mock_db:
+            mock_db.connect.return_value = MagicMock()
+            svc.connect()
+            mock_db.connect.assert_called_once_with(
+                server="localhost:1433",
+                user="sa",
+                password="SqlPassword123!",
+                database="CLARITY",
+            )
+
 
 # ---------------------------------------------------------------------------
 # list_databases / list_schemas

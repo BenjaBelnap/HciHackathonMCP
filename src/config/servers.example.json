@@ -30,6 +30,12 @@
       "port": 1433,
       "username": "app_user",
       "password": "CHANGE_ME"
+    },
+    "sqlserver-windows": {
+      "type": "sqlserver",
+      "host": "myserver.example.com",
+      "port": 1433,
+      "windows_auth": true
     }
   }
 }
