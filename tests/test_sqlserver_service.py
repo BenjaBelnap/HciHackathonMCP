@@ -85,9 +85,9 @@ class TestConnect:
             mock_db.connect.return_value = MagicMock()
             svc.connect()
             call_kwargs = mock_db.connect.call_args.kwargs
-            assert call_kwargs.get("trusted_connection") is True
             assert "user" not in call_kwargs
             assert "password" not in call_kwargs
+            assert "trusted_connection" not in call_kwargs
 
     def test_connect_sql_login_unaffected(self):
         svc = _make_service(windows_auth=False)

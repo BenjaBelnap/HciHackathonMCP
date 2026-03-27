@@ -56,9 +56,7 @@ class SqlServerQueryService(DatabaseQueryService):
 
     def connect(self) -> None:
         kwargs: dict = {"server": f"{self.host}:{self.port}"}
-        if self.windows_auth:
-            kwargs["trusted_connection"] = True
-        else:
+        if not self.windows_auth:
             kwargs["user"] = self.username
             kwargs["password"] = self.password
         if self.database:
