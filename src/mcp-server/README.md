@@ -31,11 +31,16 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-The `.env` file contains Oracle connection settings:
+The `src/config/.env` file contains Oracle connection settings. Copy the example and fill in real values:
+
+```powershell
+cd src/config
+copy .env.example .env
+```
 
 ```
-ORACLE_USERNAME=CLARITY
-ORACLE_PASSWORD=Clarity123
+ORACLE_USERNAME=your_username
+ORACLE_PASSWORD=your_password
 ORACLE_HOST=localhost
 ORACLE_PORT=1521
 ORACLE_SERVICE_NAME=XEPDB1
@@ -119,7 +124,7 @@ The server communicates via stdio (standard input/output) using the MCP protocol
    docker compose ps
    ```
 
-2. Verify credentials in `.env` match your database setup
+2. Verify credentials in `src/config/.env` match your database setup
 
 3. Check network connectivity to Oracle host/port
 

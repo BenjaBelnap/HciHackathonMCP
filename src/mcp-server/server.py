@@ -15,8 +15,8 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from src/config/.env
+load_dotenv(Path(__file__).parent.parent / "config" / ".env")
 
 # Import the Oracle Query Service
 from oracle_query_service import OracleQueryService

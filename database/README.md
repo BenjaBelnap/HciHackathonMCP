@@ -39,7 +39,7 @@ connection = oracledb.connect(user="CLARITY", password="Clarity123", dsn=dsn)
 
 ### 3. Update Service Configuration
 
-To connect the [oracle_query_service.py](../src/services/dataObjectQueryService/oracle_query_service.py) to this database, update [../src/services/dataObjectQueryService/.env](../src/services/dataObjectQueryService/.env):
+To connect the [oracle_query_service.py](../src/services/dataObjectQueryService/oracle_query_service.py) to this database, update [../src/config/.env](../src/config/.env):
 
 ```env
 ORACLE_USERNAME=CLARITY
