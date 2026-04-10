@@ -58,6 +58,14 @@ class DatabaseQueryService(ABC):
         Accepts schema-qualified names (``SCHEMA.OBJECT_NAME``).
         """
 
+    @abstractmethod
+    def get_procedure_definition(self, object_name: str, schema: Optional[str] = None) -> str:
+        """
+        Return the SQL source code of a stored procedure.
+
+        Raises NotImplementedError for engines that do not support this operation.
+        """
+
     # ------------------------------------------------------------------ #
     # Context-manager support                                              #
     # ------------------------------------------------------------------ #

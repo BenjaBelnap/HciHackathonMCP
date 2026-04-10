@@ -1,57 +1,61 @@
 ---
 name: db-schema
-description: "Discovers and inspects database schemas (tables, views, columns) across Oracle and SQL Server. Use when exploring a database, finding tables, looking up column definitions, or before writing SQL queries."
+description: "Discovers and inspects database schemas (tables, views, columns, stored procedures) across Oracle and SQL Server. Use when exploring a database, finding tables, looking up column definitions, retrieving stored procedure source code, or before writing SQL queries."
 ---
 
 # Database Object Query API — Agent Skill
 
-## Purpose
+## How to Call This API
 
-This API lets you **discover and inspect database schemas** (tables, views, and their column definitions) across multiple Oracle and SQL Server database servers.
+Use **curl via the Bash tool**. The base URL is `http://host.docker.internal:8001`.
 
-Use it whenever you need to:
-- Find what tables/views exist in a database
-- Get column names, types, and nullability for a specific table or view
-- Understand the data model before writing SQL queries
-
----
-
-## Base URL
-
-Default: `http://host.docker.internal:8001`
-
-Swagger UI: `http://host.docker.internal:8001/docs`
+> **Do NOT use WebFetch** — it cannot reach `host.docker.internal`. Always use curl.
 
 ---
 
 ## Discovery Flow (start here if you have no context)
 
-Follow this exact sequence if you don't know the server or database yet:
+Follow this sequence when you don't know the server or database yet.
 
-```
-Step 1 — Find available servers
-  GET /servers
-  → returns list of { name, type } for each configured server
+### Step 1 — Find available servers
 
-Step 2 — If server type is "sqlserver", find available databases
-  GET /servers/{server_name}/databases
-  OR
-  POST /search_objects  { "pattern": "...", "server": "sqlserver-local" }
-  → response contains "available_databases" list
-
-Step 3 — Search for objects
-  POST /search_objects  { "pattern": "...", "server": "...", "database": "..." }
-  → returns matching tables/views with match_type info
-
-Step 4 — Describe a specific object
-  POST /describe_object { "object_name": "SCHEMA.TABLE", "server": "...", "database": "..." }
-  → returns column listing
-
-Step 5 (optional) — Search + describe in one call
-  POST /search_and_describe { "pattern": "...", "server": "...", "database": "..." }
+```bash
+curl -s http://host.docker.internal:8001/servers
 ```
 
-> **Oracle note**: Oracle does not have the "database" concept. The `database` field is ignored for Oracle servers. Skip Step 2 for Oracle — go straight to Step 3.
+Returns a list of configured server connections with their type (oracle or sqlserver).
+
+### Step 2 — If SQL Server, find available databases
+
+```bash
+curl -s http://host.docker.internal:8001/servers/sqlserver-local/databases
+```
+
+> **Oracle note**: Oracle does not use databases — skip this step for Oracle servers.
+
+### Step 3 — Search for objects
+
+```bash
+curl -s -X POST http://host.docker.internal:8001/search_objects \
+  -H 'Content-Type: application/json' \
+  -d '{"pattern": "patient", "server": "sqlserver-local", "database": "CLARITY"}'
+```
+
+### Step 4 — Describe a specific object (tables/views only)
+
+```bash
+curl -s -X POST http://host.docker.internal:8001/describe_object \
+  -H 'Content-Type: application/json' \
+  -d '{"object_name": "dbo.PATIENT", "server": "sqlserver-local", "database": "CLARITY"}'
+```
+
+### Step 5 — Get stored procedure source code (SQL Server only)
+
+```bash
+curl -s -X POST http://host.docker.internal:8001/get_procedure_definition \
+  -H 'Content-Type: application/json' \
+  -d '{"object_name": "dbo.usp_SelectOne", "server": "sqlserver-local", "database": "master"}'
+```
 
 ---
 
@@ -61,7 +65,11 @@ Step 5 (optional) — Search + describe in one call
 
 List all configured server connections.
 
-**Response:**
+```bash
+curl -s http://host.docker.internal:8001/servers
+```
+
+Response:
 ```json
 [
   { "name": "oracle-local",    "type": "oracle" },
@@ -73,11 +81,13 @@ List all configured server connections.
 
 ### `GET /servers/{server_name}/databases`
 
-List databases available on a SQL Server instance.
+List databases on a SQL Server instance. For Oracle, returns an empty list with a note.
 
-**Example:** `GET /servers/sqlserver-local/databases`
+```bash
+curl -s http://host.docker.internal:8001/servers/sqlserver-local/databases
+```
 
-**Response:**
+Response:
 ```json
 {
   "server": "sqlserver-local",
@@ -86,17 +96,17 @@ List databases available on a SQL Server instance.
 }
 ```
 
-For Oracle, `databases` will be `[]` and a `note` field explains that Oracle uses schemas instead.
-
 ---
 
 ### `GET /servers/{server_name}/schemas?database={db}`
 
-List schemas within a server (or within a specific SQL Server database).
+List schemas within a server or database.
 
-**Example:** `GET /servers/sqlserver-local/schemas?database=CLARITY`
+```bash
+curl -s 'http://host.docker.internal:8001/servers/sqlserver-local/schemas?database=CLARITY'
+```
 
-**Response:**
+Response:
 ```json
 {
   "server": "sqlserver-local",
@@ -112,60 +122,43 @@ List schemas within a server (or within a specific SQL Server database).
 
 Search for database objects by name or description.
 
-**Request body:**
-```json
-{
-  "pattern":     "patient",
-  "object_type": "TABLE",
-  "schema":      "dbo",
-  "server":      "sqlserver-local",
-  "database":    "CLARITY"
-}
+```bash
+curl -s -X POST http://host.docker.internal:8001/search_objects \
+  -H 'Content-Type: application/json' \
+  -d '{"pattern": "patient", "object_type": "TABLE", "server": "sqlserver-local", "database": "CLARITY"}'
 ```
 
 | Field         | Required | Notes |
 |---------------|----------|-------|
-| `pattern`     | Yes      | Partial names work — wildcards added automatically. `"pat"` matches `PATIENT`, `PAT_ENC`, `INPATIENT_VISIT`. |
-| `object_type` | No       | `TABLE`, `VIEW`, `PROCEDURE`, `FUNCTION`. Defaults to TABLE + VIEW. |
+| `pattern`     | Yes      | Partial names work — wildcards added automatically. `"pat"` matches `PATIENT`, `PAT_ENC`, etc. |
+| `object_type` | No       | `TABLE`, `VIEW`, `PROCEDURE`, `FUNCTION`. **Default: TABLE + VIEW only.** You must explicitly pass `"PROCEDURE"` to find stored procedures. |
 | `schema`      | No       | Filter by schema/owner (e.g. `dbo`, `CLARITY`). |
-| `server`      | No       | Omit → get `available_servers` list in response. |
-| `database`    | No       | SQL Server only. Omit (with server set) → get `available_databases` list. |
+| `server`      | No       | Omit → response contains `available_servers` list instead of results. |
+| `database`    | No       | SQL Server only. Omit (with server set) → response contains `available_databases` list. Ignored for Oracle. |
 
-**Response when server is provided:**
+Response:
 ```json
 {
   "pattern": "patient",
-  "server":  "sqlserver-local",
+  "server": "sqlserver-local",
   "database": "CLARITY",
-  "count":   3,
+  "count": 2,
   "objects": [
     {
       "schema_name": "dbo",
-      "name":        "PATIENT",
-      "type":        "TABLE",
-      "match_type":  "exact",
-      "full_name":   "dbo.PATIENT"
+      "name": "PATIENT",
+      "type": "TABLE",
+      "match_type": "exact",
+      "full_name": "dbo.PATIENT"
     },
     {
       "schema_name": "dbo",
-      "name":        "PAT_ENC",
-      "type":        "TABLE",
-      "match_type":  "prefix",
-      "full_name":   "dbo.PAT_ENC"
+      "name": "PAT_ENC",
+      "type": "TABLE",
+      "match_type": "prefix",
+      "full_name": "dbo.PAT_ENC"
     }
   ]
-}
-```
-
-**Response when server is omitted:**
-```json
-{
-  "pattern": "patient",
-  "available_servers": [
-    { "name": "oracle-local",    "type": "oracle" },
-    { "name": "sqlserver-local", "type": "sqlserver" }
-  ],
-  "message": "No server specified. Please include a 'server' field..."
 }
 ```
 
@@ -181,70 +174,89 @@ Search for database objects by name or description.
 
 ### `POST /describe_object`
 
-Get column definitions for a specific table or view.
+Get column definitions for a table or view.
 
-**Request body:**
-```json
-{
-  "object_name": "dbo.PATIENT",
-  "server":      "sqlserver-local",
-  "database":    "CLARITY"
-}
+```bash
+curl -s -X POST http://host.docker.internal:8001/describe_object \
+  -H 'Content-Type: application/json' \
+  -d '{"object_name": "dbo.PATIENT", "server": "sqlserver-local", "database": "CLARITY"}'
 ```
 
-You can pass the schema in `object_name` as `SCHEMA.TABLE`, or separately in `schema`.
+| Field         | Required | Notes |
+|---------------|----------|-------|
+| `object_name` | Yes      | Schema-qualified names work: `SCHEMA.TABLE` or just the name. |
+| `schema`      | No       | Schema / owner (optional if included in `object_name`). |
+| `server`      | No       | Omit → guided discovery response. |
+| `database`    | No       | SQL Server only. |
 
-**Response:**
+Response:
 ```json
 {
   "object_name": "dbo.PATIENT",
-  "server":      "sqlserver-local",
-  "database":    "CLARITY",
+  "server": "sqlserver-local",
+  "database": "CLARITY",
   "result": "Column Name                     Nullable  Data Type\n------------------------------- --------- ----------------------------\nPAT_ID                          NOT NULL  int\nPAT_NAME                        NULL      varchar(100)\n..."
 }
 ```
+
+> **Note:** This endpoint is for tables and views only. Calling it on a stored procedure will return "Object not found". Use `/get_procedure_definition` for procedures.
+
+---
+
+### `POST /get_procedure_definition`
+
+Get the SQL source code of a stored procedure. **SQL Server only.**
+
+```bash
+curl -s -X POST http://host.docker.internal:8001/get_procedure_definition \
+  -H 'Content-Type: application/json' \
+  -d '{"object_name": "dbo.usp_SelectOne", "server": "sqlserver-local", "database": "master"}'
+```
+
+| Field         | Required | Notes |
+|---------------|----------|-------|
+| `object_name` | Yes      | Schema-qualified names work: `dbo.usp_MyProc` or just the name. |
+| `schema`      | No       | Schema / owner (optional if included in `object_name`). |
+| `server`      | No       | Omit → guided discovery response. |
+| `database`    | No       | Omit → guided discovery with available databases. |
+
+Response:
+```json
+{
+  "object_name": "dbo.usp_SelectOne",
+  "server": "sqlserver-local",
+  "database": "master",
+  "definition": "CREATE PROCEDURE dbo.usp_SelectOne\nAS\nBEGIN\n    SELECT 1 AS Result;\nEND"
+}
+```
+
+Error cases:
+- **Oracle server** → HTTP 422: `"Procedure definition retrieval is only supported for SQL Server connections."`
+- **Not found** → `"definition": "Procedure 'X' not found or not accessible."`
+- **Encrypted** → `"definition": "Procedure 'X' is encrypted — definition is not available."`
 
 ---
 
 ### `POST /search_and_describe`
 
-Combined search + describe in a single request. Useful when you know the pattern but not the exact object name.
+Combined search + describe in a single request. Searches for objects and describes the matches.
 
-**Request body:**
-```json
-{
-  "pattern":      "patient",
-  "server":       "sqlserver-local",
-  "database":     "CLARITY",
-  "describe_all": false
-}
+```bash
+curl -s -X POST http://host.docker.internal:8001/search_and_describe \
+  -H 'Content-Type: application/json' \
+  -d '{"pattern": "patient", "server": "sqlserver-local", "database": "CLARITY", "describe_all": false}'
 ```
 
-Setting `"describe_all": true` describes every matching object (can be verbose). Default is `false` — describes only the first/best match.
-
-**Response:**
-```json
-{
-  "pattern":  "patient",
-  "server":   "sqlserver-local",
-  "database": "CLARITY",
-  "count":    2,
-  "objects":  [ ... ],
-  "descriptions": {
-    "dbo.PATIENT": "Column Name ...\n..."
-  }
-}
-```
+Setting `"describe_all": true` describes every match (can be verbose). Default describes only the first/best match.
 
 ---
 
-## Search Tips
+## Important Nuances
 
-- **Partial names always work**: `"pat"` → PATIENT, PAT_ENC, INPATIENT_VISIT
-- **No need for `%` wildcards** — the API adds them automatically
-- **Case insensitive** — `"Patient"`, `"PATIENT"`, `"patient"` all work the same
-- **Description search**: If an object has extended property / table comment containing your term, it shows up as `match_type: "comment"`
-- **Filter noise**: Use `"object_type": "TABLE"` to exclude views, procedures, etc.
-- **Narrow by schema**: Use `"schema": "dbo"` to skip system schemas
-
----
+- **Default search returns only TABLE + VIEW.** To find procedures, you must pass `"object_type": "PROCEDURE"`.
+- **Guided discovery, not errors.** When you omit `server` or `database`, the API returns a helpful response with available options — it does not return an HTTP error.
+- **Case insensitive.** `"Patient"`, `"PATIENT"`, `"patient"` all work the same.
+- **No wildcards needed.** The API adds `%` wildcards automatically.
+- **Oracle has no databases.** The `database` field is ignored for Oracle servers. Skip the database discovery step.
+- **`describe_object` is for tables/views only.** Use `/get_procedure_definition` for stored procedure source code.
+- **Procedure definitions are SQL Server only.** Oracle connections return a 422 error.

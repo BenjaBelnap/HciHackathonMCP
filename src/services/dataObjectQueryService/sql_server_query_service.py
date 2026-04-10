@@ -270,3 +270,31 @@ class SqlServerQueryService(DatabaseQueryService):
             output.append(f"{col_name:<31} {null_str:<9} {type_str}")
 
         return "\n".join(output)
+
+    # ------------------------------------------------------------------ #
+    # Procedure definition                                                 #
+    # ------------------------------------------------------------------ #
+
+    def get_procedure_definition(self, object_name: str, schema: Optional[str] = None) -> str:
+        """Return the SQL source code of a stored procedure."""
+        if "." in object_name and schema is None:
+            schema, object_name = object_name.split(".", 1)
+
+        if not self.connection:
+            self.connect()
+
+        qualified = f"{schema}.{object_name}" if schema else object_name
+
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "SELECT definition FROM sys.sql_modules WHERE object_id = OBJECT_ID(%s)",
+            [qualified],
+        )
+        row = cursor.fetchone()
+        cursor.close()
+
+        if row is None:
+            return f"Procedure '{qualified}' not found or not accessible."
+        if row[0] is None:
+            return f"Procedure '{qualified}' is encrypted — definition is not available."
+        return row[0]

@@ -207,6 +207,46 @@ class SearchAndDescribeResponse(BaseModel):
     message: Optional[str]                    = None
 
 
+class GetProcedureDefinitionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_name: str = Field(
+        ...,
+        description=(
+            "Name of the stored procedure. Accepts schema-qualified names "
+            "(e.g. dbo.usp_GetPatient)."
+        ),
+        examples=["dbo.usp_GetPatient", "usp_SelectOne"],
+    )
+    db_schema: Optional[str] = Field(
+        None,
+        alias="schema",
+        description="Schema / owner (optional if included in object_name).",
+        examples=["dbo"],
+    )
+    server: Optional[str] = Field(
+        None,
+        description="Name of the server connection. Omit to receive available servers.",
+        examples=["sqlserver-local"],
+    )
+    database: Optional[str] = Field(
+        None,
+        description="SQL Server only: database context.",
+        examples=["master", "CLARITY"],
+    )
+
+
+class GetProcedureDefinitionResponse(BaseModel):
+    object_name: str
+    db_schema: Optional[str]     = Field(None, alias="schema")
+    server: Optional[str]        = None
+    database: Optional[str]      = None
+    definition: Optional[str]    = None
+    available_servers: Optional[list[ServerInfo]] = None
+    available_databases: Optional[list[str]]      = None
+    message: Optional[str]                        = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -571,6 +611,92 @@ def search_and_describe(
             detail=(
                 f"Error during search_and_describe with pattern '{request.pattern}': {exc}\n\n"
                 "Verify database connectivity and parameter values."
+            ),
+        )
+
+
+@app.post(
+    "/get_procedure_definition",
+    response_model=GetProcedureDefinitionResponse,
+    tags=["tools"],
+)
+def get_procedure_definition(
+    request: GetProcedureDefinitionRequest,
+    manager: ConnectionManager = Depends(get_manager),
+):
+    """
+    Return the SQL source code of a stored procedure.
+
+    **SQL Server only.** Returns an error for Oracle connections.
+
+    Same discovery behaviour as other endpoints: omit ``server`` or ``database``
+    to receive guided discovery responses.
+    """
+    try:
+        if not request.server:
+            servers = [ServerInfo(**s) for s in manager.list_servers()]
+            return GetProcedureDefinitionResponse(
+                object_name=request.object_name,
+                available_servers=servers,
+                message=(
+                    "No server specified. Include a 'server' field using one of "
+                    "the available server names listed in 'available_servers'."
+                ),
+            )
+
+        server_type = manager.get_server_type(request.server)
+
+        if server_type != "sqlserver":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Procedure definition retrieval is only supported for SQL Server connections. "
+                    f"Server '{request.server}' is of type '{server_type}'."
+                ),
+            )
+
+        if not request.database:
+            service = manager.get_service(request.server)
+            service.connect()
+            databases = service.list_databases()
+            service.disconnect()
+            return GetProcedureDefinitionResponse(
+                object_name=request.object_name,
+                server=request.server,
+                available_databases=databases,
+                message=(
+                    f"Server '{request.server}' requires a database selection. "
+                    "Include a 'database' field using one of 'available_databases'."
+                ),
+            )
+
+        service = manager.get_service(request.server, request.database)
+        service.connect()
+        definition = service.get_procedure_definition(
+            request.object_name, schema=request.db_schema
+        )
+        service.disconnect()
+
+        return GetProcedureDefinitionResponse(
+            object_name=request.object_name,
+            db_schema=request.db_schema,
+            server=request.server,
+            database=request.database,
+            definition=definition,
+        )
+
+    except ServerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Error retrieving definition for '{request.object_name}': {exc}\n\n"
+                "Verify the procedure name, schema, and database are correct."
             ),
         )
 

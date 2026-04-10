@@ -229,3 +229,12 @@ class OracleQueryService(DatabaseQueryService):
             output.append(f"{col_name:<31} {null_str:<8} {type_str}")
 
         return "\n".join(output)
+
+    # ------------------------------------------------------------------ #
+    # Procedure definition                                                 #
+    # ------------------------------------------------------------------ #
+
+    def get_procedure_definition(self, object_name: str, schema: Optional[str] = None) -> str:
+        raise NotImplementedError(
+            "Stored procedure definition retrieval is not supported for Oracle connections."
+        )
