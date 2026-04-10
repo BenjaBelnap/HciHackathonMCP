@@ -117,12 +117,14 @@ class ConnectionManager:
                 password=cfg["password"],
             )
         elif server_type == "sqlserver":
+            windows_auth = cfg.get("windows_auth", False)
             return SqlServerQueryService(
                 host=cfg["host"],
                 port=int(cfg.get("port", 1433)),
-                username=cfg["username"],
-                password=cfg["password"],
+                username=cfg.get("username"),
+                password=cfg.get("password"),
                 database=database,
+                windows_auth=windows_auth,
             )
         else:
             raise ValueError(

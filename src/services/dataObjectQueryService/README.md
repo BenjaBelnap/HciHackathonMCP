@@ -27,13 +27,12 @@ pip install -r requirements.txt
 ### 3. Configure Database Connection
 
 ```powershell
-# Copy the example environment file
+# Copy the example environment file (from the project config directory)
+cd ..\..\..\src\config
 copy .env.example .env
-
-# Edit .env with your actual Oracle database credentials
 ```
 
-Update the `.env` file with your Oracle database connection details:
+Update `src/config/.env` with your Oracle database connection details:
 - `ORACLE_USERNAME`: Your Oracle database username
 - `ORACLE_PASSWORD`: Your Oracle database password
 - `ORACLE_HOST`: Oracle database host/IP address
